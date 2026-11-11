@@ -1,0 +1,21 @@
+{
+  "name": "Endless Halls",
+  "genre": "horror",
+  "dim": "3D",
+  "mode": "Co-op",
+  "players": "1–4",
+  "hook": "Find the keys. Stay together. Don't listen too long.",
+  "how": "Wander endless yellow halls with your friends to find three keys, then the EXIT to the next level. Something walks the halls with you: you hear it before you see it, and it comes for whoever is alone.",
+  "controls": "WASD to walk, drag the mouse to look, Shift to run, or the touch stick, drag to look and RUN",
+  "uses": [
+    ["Host-run rules", "The host's browser builds each level from a seed, moves the entity and decides who gets taken; if it leaves, the next player takes over."],
+    ["Bots", "Bot explorers search the halls, find keys and run with you until friends join."],
+    ["Live sync", "Everyone walks the same halls and sees each other move."],
+    ["Leaderboard", "The deepest level each player reached."]
+  ],
+  "ideas": [
+    "Add a flashlight with a battery that runs out",
+    "Make every fifth level a flooded pool room",
+    "Add a second entity that only moves when nobody looks at it"
+  ]
+}
