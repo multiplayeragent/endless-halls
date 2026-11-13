@@ -34,6 +34,7 @@
   .card h2 { margin: 0 0 4px; font-size: 24px; }
   .card h3 { margin: 14px 0 4px; font-size: 13px; color: #ffe27a; text-transform: uppercase; letter-spacing: .08em; }
   .card ol { margin: 0; padding-left: 24px; font-size: 14px; }
+  .card li.note { list-style: none; margin-left: -24px; } /* a status line, not a numbered entry */
   .card li span { float: right; font-variant-numeric: tabular-nums; }
   .card p { margin: 6px 0 0; font-size: 14px; opacity: .85; }
   button.go { margin-top: 16px; width: 100%; min-height: 48px; border: 0; border-radius: 12px; background: #ffe27a; color: #2a2000; font: 800 17px system-ui, sans-serif; cursor: pointer; }
@@ -60,7 +61,7 @@
 <div class="pad" id="pad" hidden><button data-k="run">RUN</button></div>
 <div id="over" hidden><div class="card">
   <h2 id="overTitle"></h2><p id="overLine"></p>
-  <h3>Deepest runs</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Deepest runs</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button class="go" id="again">Play again</button>
   <p id="next"></p>
 </div></div>
@@ -115,6 +116,7 @@ const CONFIG = {
   resultsMs: 12000,       // ms the results show before a new run
   walk: 3.8, run: 5.8,    // your speeds, units/s
   botWalk: 3.4, botRun: 5.3, // bot explorers: a bit slower
+  botGap: 1.6,            // a bot keeping you company stops at least this far from you
   radius: 0.3,            // how wide a person is, for walls
   reach: 1.7,             // how close you get to pick up a key or use the exit
   closeRange: 7,          // a teammate this close counts as company
@@ -673,6 +675,7 @@ function botThink(b, G, all) {
   const same = b.goal && b.mode === mode && Math.hypot(goal.x - b.goal.x, goal.z - b.goal.z) < 1 && b.path.length;
   b.mode = mode; b.goal = goal;
   if (!same) b.path = goal.room ? [...route(b, goal.room), { x: goal.x, z: goal.z }] : route(b, goal);
+  if (mode === "regroup" || mode === "buddy") while (b.path.length && dist(b.path[b.path.length - 1], leader) < CONFIG.botGap) b.path.pop(); // stop beside them, not inside them
 }
 /** Dread for anyone: up while alone or near the entity, down with company. */
 function nextDread(d, who, all, dt) {
@@ -758,6 +761,7 @@ function hud(g) {
   $("net").textContent = net.offline ? "Offline: playing with bots" : dropped ? "Reconnecting…" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the halls" : ""}`;
   const over = g.phase === "over";
   $("over").hidden = !over;
+  if (over && document.pointerLockElement) document.exitPointerLock(); // free the mouse so "Play again" can be clicked
   if (over) {
     $("overTitle").textContent = "The halls kept you";
     $("overLine").textContent = `Your team reached level ${g.level}. Every light went out.`;
@@ -774,17 +778,18 @@ function compass(g, all, open) {
     if (Math.abs(rel) > Math.PI / 2) return;
     items.push(`<${cls} style="left:${(50 - (rel / (Math.PI / 2)) * 50).toFixed(1)}%;opacity:${(1 - Math.min(1, d / CONFIG.hearRange) * 0.7).toFixed(2)}${cls === "em" ? ";background:" + html : ""}">${cls === "em" ? "" : html}</${cls}>`);
   };
-  if (open) place(g.exit, "🚪", "span", Infinity); // the open exit hums loud enough to hear from anywhere else g.keys.forEach((k) => { if (!k.b) place(k, "🔑", "span"); });
+  if (open) place(g.exit, "🚪", "span", Infinity); // the open exit hums loud enough to hear from anywhere
+  else g.keys.forEach((k) => { if (!k.b) place(k, "🔑", "span"); });
   for (const c of all) if (!c.mine) place(c, c.color, "em");
   $("compass").innerHTML = items.join("");
 }
 function showBoard(g) {
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  if (!board) { list.innerHTML = "<li class='note'>Leaderboards need a connection.</li>"; return; }
   const submit = me.lk === lkOf(g) ? board.submit(g.level).catch(() => null) : Promise.resolve();
   submit.then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>Level ${e.score}</span></li>`).join("") : "<li>No runs yet. Be the first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>Level ${e.score}</span></li>`).join("") : "<li class='note'>No runs yet. Be the first.</li>";
+  }).catch(() => { list.innerHTML = "<li class='note'>Couldn't load the leaderboard.</li>"; });
 }
 /** Keep a color nobody else has: the later sessionId gives way, and the bots' colors count as taken. */
 function fixColor() {
@@ -825,6 +830,7 @@ cv.addEventListener("pointerdown", (e) => {
   if (look.id < 0) { look.id = e.pointerId; look.lx = e.clientX; look.ly = e.clientY; }
   if (e.pointerType === "mouse" && cv.requestPointerLock && !ATTRACT) { const r = cv.requestPointerLock(); if (r && r.catch) r.catch(() => {}); }
 });
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
 cv.addEventListener("pointermove", (e) => {
   if (document.pointerLockElement === cv) { turn(e.movementX, e.movementY); return; }
   if (e.pointerId === stick.id) {
