@@ -19,7 +19,7 @@
   #team i u { display: block; height: 100%; background: #ff5a4a; }
   #team .me { color: #ffe27a; }
   #compass:empty { border: 0; }
-  #compass { top: max(14px, env(safe-area-inset-top)); left: 50%; width: min(300px, 46vw); height: 30px; transform: translateX(-50%); border-bottom: 2px solid #fbf3d244; }
+  #compass { top: max(14px, env(safe-area-inset-top)); left: 50%; width: min(300px, 40vw); height: 30px; transform: translateX(-50%); border-bottom: 2px solid #fbf3d244; }
   #compass span { position: absolute; top: 2px; transform: translateX(-50%); font-size: 18px; transition: opacity .3s; }
   #compass em { position: absolute; top: 12px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; }
   #big { inset: 0; display: grid; place-items: center; text-align: center; font-size: clamp(26px, 6vw, 46px); letter-spacing: .06em; padding: 0 16px; }
@@ -122,6 +122,7 @@ const CONFIG = {
   closeRange: 7,          // a teammate this close counts as company
   dread: { alone: 7, near: 22, calm: 25 }, // per second: + when alone, + when the entity is within 12, − with company
   hearRange: 34,          // how far you hear the entity and the keys' chime
+  botHearGrow: 1,         // bot explorers hear the keys this much farther (units) for every second of a level, so a lost key is always found
   // The entity: speeds (units/s, + perLevel each level), how far it sees, catch distance, ms it sleeps at the
   // start of a level, ms it keeps chasing what it lost, ms it is gone after taking someone.
   ent: { wander: 1.8, stalk: 2.9, chase: 4.4, perLevel: 0.12, sight: 14, catch: 1.0, sleepMs: 8000, giveUpMs: 3000, goneMs: 6000 },
@@ -244,11 +245,11 @@ function stepsFrom(si, sj, pad) {
   }
   return { at: (i, j) => (i < i0 || j < j0 || i >= i0 + w || j >= j0 + w ? -1 : d[i - i0 + (j - j0) * w]), i0, j0, w };
 }
-/** A walkable route from a to b as cell centres (ending at b), or [] if there is none nearby. */
-function route(a, b) {
+/** A walkable route from a to b as cell centres (ending at b), or [] if there is none nearby. A long detour searches wider. */
+function route(a, b, pad = 12) {
   const si = toI(a.x), sj = toI(a.z), gi = toI(b.x), gj = toI(b.z);
   if (!isOpen(gi, gj)) return [];
-  const pad = 12, i0 = Math.min(si, gi) - pad, j0 = Math.min(sj, gj) - pad, w = Math.max(si, gi) + pad - i0 + 1, h = Math.max(sj, gj) + pad - j0 + 1;
+  const i0 = Math.min(si, gi) - pad, j0 = Math.min(sj, gj) - pad, w = Math.max(si, gi) + pad - i0 + 1, h = Math.max(sj, gj) + pad - j0 + 1;
   if (w * h > 60000) return [];
   const prev = new Int32Array(w * h).fill(-1), start = si - i0 + (sj - j0) * w, goal = gi - i0 + (gj - j0) * w, q = [start];
   prev[start] = start;
@@ -260,7 +261,7 @@ function route(a, b) {
       prev[n] = c; q.push(n);
     }
   }
-  if (prev[goal] < 0) return [];
+  if (prev[goal] < 0) return pad < 30 ? route(a, b, 30) : [];
   const out = [{ x: b.x, z: b.z }];
   for (let k = prev[goal]; k !== prev[k]; k = prev[k]) out.unshift({ x: centerOf((k % w) + i0), z: centerOf(((k / w) | 0) + j0) });
   return out;
@@ -632,9 +633,14 @@ function botsTick(dt, G, all, t) {
   let dirty = false;
   const agents = [...host.bots.values()];
   if (ATTRACT) agents.push(me);
+  const crowd = [...agents, ...all.filter((c) => !c.bot && !agents.some((a) => a.id === c.id)).map((c) => ({ ...c, bot: false }))];
   for (const b of agents) {
     b.mv = b.r = false;
     if (b !== me) b.dread = nextDread(b.dread, b, all, dt);
+    for (const o of crowd) { // step aside: a bot never stands inside another bot, nor in a player's face
+      const gap = o.bot === false ? 1.2 : 0.8, dx = b.x - o.x, dz = b.z - o.z, d = Math.hypot(dx, dz);
+      if (o.id !== b.id && d < gap) moveBody(b, d > 0.01 ? (dx / d) * (gap - d) * 0.5 : 0.05, d > 0.01 ? (dz / d) * (gap - d) * 0.5 : 0);
+    }
     if (G.phase !== "explore") continue;
     if (t > b.think) { b.think = t + 400 + Math.random() * 400; botThink(b, G, all); }
     const fast = b.mode === "flee", speed = b === me ? (fast ? CONFIG.run : CONFIG.walk) : fast ? CONFIG.botRun : CONFIG.botWalk;
@@ -644,9 +650,10 @@ function botsTick(dt, G, all, t) {
   return dirty;
 }
 function botThink(b, G, all) {
-  const e = host.ent, cellKey = (p) => toI(p.x) + "," + toI(p.z);
-  host.visited.add(cellKey(b));
-  G.keys.forEach((k, i) => { if (!k.b && dist(b, k) < CONFIG.hearRange) host.seen.add(i); }); // bots hear the chime too
+  const e = host.ent, blockOf = (p) => Math.floor(p.x / (2 * P)) + "," + Math.floor(p.z / (2 * P)); // 2×2 rooms
+  for (const c of all) host.visited.add(blockOf(c)); // where anyone on the team has been
+  const hear = CONFIG.hearRange + Math.max(0, Date.now() - G.startAt) / 1000 * CONFIG.botHearGrow;
+  G.keys.forEach((k, i) => { if (!k.b && dist(b, k) < hear) host.seen.add(i); }); // bots hear the chime too, farther the longer a level goes on
   const humans = all.filter((c) => !c.bot && c.id !== b.id), leader = humans.sort((p, q) => dist(p, b) - dist(q, b))[0];
   const buddy = leader && !ATTRACT && [...host.bots.values()].sort((p, q) => dist(p, leader) - dist(q, leader))[0] === b;
   let mode = "explore", goal = null;
@@ -665,10 +672,15 @@ function botThink(b, G, all) {
     else if (leader && dist(leader, b) > (buddy ? 4 : 12)) { mode = "regroup"; goal = { x: leader.x, z: leader.z }; }
     else if (buddy) { mode = "buddy"; goal = b.mode === "buddy" && b.path.length ? b.goal : leader.moving ? { x: leader.x, z: leader.z } : null; } // the closest bot keeps you company
     else if (b.mode === "explore" && b.goal && b.path.length > 1) goal = b.goal;
-    else {
-      const me0 = leader || b, around = { x: me0.x + (SPAWN.x - me0.x) * 0.3, z: me0.z + (SPAWN.z - me0.z) * 0.3 }; // drift back toward where the keys are hidden
-      for (let k = 0; k < 8 && !goal; k++) { const q = randomRoomNear(around, 10, Math.random, 2); if (q && !host.visited.has(cellKey(q))) goal = q; }
-      goal = goal || randomRoomNear(around, 10, Math.random, 2) || SPAWN;
+    else { // explore the edge of what the team has seen, never far past where keys can be hidden
+      const me0 = leader || b, around = { x: me0.x + (SPAWN.x - me0.x) * 0.3, z: me0.z + (SPAWN.z - me0.z) * 0.3 }, fresh = (q) => { let n = 0; for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) n += host.visited.has(blockOf({ x: q.x + dx * 2 * P, z: q.z + dz * 2 * P })) ? 1 : 0; return n; };
+      let best = Infinity;
+      for (let k = 0; k < 12; k++) {
+        const q = randomRoomNear(around, 12, Math.random, 2); if (!q) continue;
+        const score = fresh(q) + (dist(q, SPAWN) > CONFIG.keyDist[1] * P * 0.5 + 6 ? 9 : 0) + Math.random() * 0.5;
+        if (score < best) { best = score; goal = q; }
+      }
+      goal = goal || SPAWN;
     }
   }
   if (!goal) return;
@@ -727,6 +739,7 @@ function myTick(dt, g) {
 function applyTake(id, i) {
   const g = game();
   if (!g || g.phase !== "explore") return;
+  if (!Number.isInteger(i)) return; // a crafted index ("length", "0", 1.5) is ignored
   const k = g.keys[i], who = people(g).find((c) => c.id === id);
   if (!k || k.b || !who || dist(who, k) > CONFIG.reach + 1.5) return; // slack: the intent can beat the sender's latest position
   const G = clone(g); G.keys[i].b = id; writeGame(G);
